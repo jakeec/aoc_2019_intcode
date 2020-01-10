@@ -1,12 +1,29 @@
 fn main() {
-    let (memory, output) = intcode(
-        vec![3, 12, 6, 12, 15, 1, 13, 14, 13, 4, 13, 99, -1, 0, 1, 9],
-        vec![9],
-    );
+    use std::fs;
+    let input = fs::read_to_string("./inputs/day2.ic").unwrap();
+    let mut noun = 0;
+    let mut verb = 0;
+    let mut found = false;
+    while !found {
+        for v in 0..99 {
+            verb = v;
+            let (memory, _) = run(&input, noun, verb);
+            if memory[0] == 19690720 {
+                found = true;
+                break;
+            }
+        }
+
+        if !found {
+            noun += 1;
+        }
+    }
+    assert_eq!((100 * noun) + verb, 7733);
 }
 
 const POSITION_MODE: isize = 0;
 const IMMEDIATE_MODE: isize = 1;
+const RELATIVE_MODE: isize = 2;
 
 fn runWithInput(program: &str, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
     let mut codes: Vec<isize> = program
@@ -41,11 +58,15 @@ fn parse_opcode(code: isize) -> (isize, isize, isize, isize, isize) {
     )
 }
 
-fn get_code(codes: &Vec<isize>, index: isize, mode: isize) -> isize {
+fn get_code(codes: &Vec<isize>, index: isize, mode: isize, rb: isize) -> isize {
     match mode {
         POSITION_MODE => match codes.get(index as usize) {
             None => 0,
             Some(x) => *x,
+        },
+        RELATIVE_MODE => match codes.get((index) as usize) {
+            None => 0,
+            Some(x) => rb + *x,
         },
         IMMEDIATE_MODE => index,
         _ => panic!("Not a valid parameter mode! Mode given: {}", mode),
@@ -54,55 +75,76 @@ fn get_code(codes: &Vec<isize>, index: isize, mode: isize) -> isize {
 
 fn get_addresses(
     mem: &Vec<isize>,
+    rb: isize,
     pc: isize,
     p1: isize,
     p2: isize,
     p3: isize,
 ) -> (usize, usize, usize) {
     (
-        get_code(&mem, pc + 3, p3) as usize,
-        get_code(&mem, pc + 1, p1) as usize,
-        get_code(&mem, pc + 2, p2) as usize,
+        get_code(&mem, pc + 3, p3, rb) as usize,
+        get_code(&mem, pc + 1, p1, rb) as usize,
+        get_code(&mem, pc + 2, p2, rb) as usize,
     )
 }
 
+fn trim_dead_memory(mem: &Vec<isize>) -> Vec<isize> {
+    let mut mem = mem.clone();
+    let last = mem.len() - 1;
+    let mut index = last;
+
+    for i in 0..last {
+        if mem[index] == 0 {
+            mem.remove(index);
+            index -= 1;
+        } else {
+            break;
+        }
+    }
+
+    mem
+}
+
 fn intcode(codes: Vec<isize>, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
+    let mut empty_memory = vec![0; 100_000];
     let mut mem = codes.clone();
+    mem.append(&mut empty_memory);
 
     let mut pc: isize = 0;
     let mut ic: isize = 0;
+    let mut relative_base: isize = 0;
     let mut output: Vec<isize> = vec![];
 
     loop {
         let opcode = mem[pc as usize];
         let opcode = parse_opcode(opcode);
-        println!("{:?}", opcode);
         match opcode {
             (a, b, c, d, 1) => {
                 let (out_addr, rand_1_addr, rand_2_addr) =
-                    get_addresses(&mem, pc, c, b, POSITION_MODE);
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 mem[out_addr] = mem[rand_1_addr] + mem[rand_2_addr];
                 pc += 4;
             }
             (a, b, c, d, 2) => {
                 let (out_addr, rand_1_addr, rand_2_addr) =
-                    get_addresses(&mem, pc, c, b, POSITION_MODE);
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 mem[out_addr] = mem[rand_1_addr] * mem[rand_2_addr];
                 pc += 4;
             }
             (a, b, c, d, 3) => {
-                let (_, rand_1_addr, _) = get_addresses(&mem, pc, POSITION_MODE, b, a);
+                let (_, rand_1_addr, _) = get_addresses(&mem, relative_base, pc, c, b, a);
                 mem[rand_1_addr] = input[ic as usize];
                 ic += 1;
                 pc += 2;
             }
             (a, b, c, d, 4) => {
-                let (_, rand_1_addr, _) = get_addresses(&mem, pc, c, b, a);
+                let (_, rand_1_addr, _) = get_addresses(&mem, relative_base, pc, c, b, a);
                 output.push(mem[rand_1_addr]);
                 pc += 2;
             }
             (a, b, c, d, 5) => {
-                let (out_addr, rand_1_addr, rand_2_addr) = get_addresses(&mem, pc, c, b, a);
+                let (out_addr, rand_1_addr, rand_2_addr) =
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 if mem[rand_1_addr] != 0 {
                     pc = mem[rand_2_addr];
                 } else {
@@ -110,7 +152,8 @@ fn intcode(codes: Vec<isize>, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
                 }
             }
             (a, b, c, d, 6) => {
-                let (out_addr, rand_1_addr, rand_2_addr) = get_addresses(&mem, pc, c, b, a);
+                let (out_addr, rand_1_addr, rand_2_addr) =
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 if mem[rand_1_addr] == 0 {
                     pc = mem[rand_2_addr];
                 } else {
@@ -118,7 +161,8 @@ fn intcode(codes: Vec<isize>, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
                 }
             }
             (a, b, c, d, 7) => {
-                let (out_addr, rand_1_addr, rand_2_addr) = get_addresses(&mem, pc, c, b, a);
+                let (out_addr, rand_1_addr, rand_2_addr) =
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 if mem[rand_1_addr] < mem[rand_2_addr] {
                     mem[out_addr] = 1;
                 } else {
@@ -127,7 +171,8 @@ fn intcode(codes: Vec<isize>, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
                 pc += 4;
             }
             (a, b, c, d, 8) => {
-                let (out_addr, rand_1_addr, rand_2_addr) = get_addresses(&mem, pc, c, b, a);
+                let (out_addr, rand_1_addr, rand_2_addr) =
+                    get_addresses(&mem, relative_base, pc, c, b, a);
                 if mem[rand_1_addr] == mem[rand_2_addr] {
                     mem[out_addr] = 1;
                 } else {
@@ -135,9 +180,15 @@ fn intcode(codes: Vec<isize>, input: Vec<isize>) -> (Vec<isize>, Vec<isize>) {
                 }
                 pc += 4;
             }
-            (_, _, _, 9, 9) => {
-                return (mem, output);
-            }
+            (a, b, c, d, 9) => match d {
+                9 => return (mem, output),
+                d => {
+                    let (out_addr, rand_1_addr, rand_2_addr) =
+                        get_addresses(&mem, relative_base, pc, c, b, a);
+                    relative_base += mem[rand_1_addr];
+                    pc += 2;
+                }
+            },
             _ => panic!("{} is not a valid opcode", mem[pc as usize]),
         }
     }
@@ -151,37 +202,40 @@ mod day_2 {
     #[test]
     fn part_1_example_1() {
         let (memory, _) = intcode(vec![1, 0, 0, 3, 99], vec![]);
-        assert_eq!(memory, vec![1, 0, 0, 2, 99]);
+        assert_eq!(memory[0..5], vec![1, 0, 0, 2, 99][..]);
     }
 
     #[test]
     fn part_1_example_2() {
         let (memory, _) = intcode(vec![1, 9, 10, 3, 2, 3, 11, 0, 99, 30, 40, 50], vec![]);
-        assert_eq!(memory, vec![3500, 9, 10, 70, 2, 3, 11, 0, 99, 30, 40, 50]);
+        assert_eq!(
+            memory[0..12],
+            vec![3500, 9, 10, 70, 2, 3, 11, 0, 99, 30, 40, 50][..]
+        );
     }
 
     #[test]
     fn part_1_example_3() {
         let (memory, _) = intcode(vec![1, 0, 0, 0, 99], vec![]);
-        assert_eq!(memory, vec![2, 0, 0, 0, 99]);
+        assert_eq!(memory[0..5], vec![2, 0, 0, 0, 99][..]);
     }
 
     #[test]
     fn part_1_example_4() {
         let (memory, _) = intcode(vec![2, 3, 0, 3, 99], vec![]);
-        assert_eq!(memory, vec![2, 3, 0, 6, 99]);
+        assert_eq!(memory[0..5], vec![2, 3, 0, 6, 99][..]);
     }
 
     #[test]
     fn part_1_example_5() {
         let (memory, _) = intcode(vec![2, 4, 4, 5, 99, 0], vec![]);
-        assert_eq!(memory, vec![2, 4, 4, 5, 99, 9801]);
+        assert_eq!(memory[0..6], vec![2, 4, 4, 5, 99, 9801][..]);
     }
 
     #[test]
     fn part_1_example_6() {
         let (memory, _) = intcode(vec![1, 1, 1, 4, 99, 5, 6, 0, 99], vec![]);
-        assert_eq!(memory, vec![30, 1, 1, 4, 2, 5, 6, 0, 99]);
+        assert_eq!(memory[0..9], vec![30, 1, 1, 4, 2, 5, 6, 0, 99][..]);
     }
 
     #[test]
@@ -223,33 +277,25 @@ mod day_5 {
     #[test]
     fn part_1_example_1() {
         let (memory, output) = intcode(vec![3, 0, 4, 0, 99], vec![1]);
-        println!("{:?}", memory);
-        println!("{:?}", output);
         assert_eq!(output[0], 1);
     }
 
     #[test]
     fn part_1_example_2() {
         let (memory, output) = intcode(vec![1002, 4, 3, 4, 33], vec![1]);
-        println!("{:?}", memory);
-        println!("{:?}", output);
-        assert_eq!(memory, vec![1002, 4, 3, 4, 99]);
+        assert_eq!(memory[0..5], vec![1002, 4, 3, 4, 99][..]);
     }
 
     #[test]
     fn part_1_example_3() {
         let (memory, output) = intcode(vec![1101, 100, -1, 4, 0], vec![1]);
-        println!("{:?}", memory);
-        println!("{:?}", output);
-        assert_eq!(memory, vec![1101, 100, -1, 4, 99]);
+        assert_eq!(memory[0..5], vec![1101, 100, -1, 4, 99][..]);
     }
 
     #[test]
     fn part_1_puzzle() {
         let input = fs::read_to_string("./inputs/day5.ic").unwrap();
         let (memory, output) = runWithInput(&input, vec![1]);
-        println!("{:?}", memory);
-        println!("{:?}", output);
         assert_eq!(output.last().unwrap(), &14155342);
     }
 
@@ -380,8 +426,54 @@ mod day_5 {
     fn part_2_puzzle() {
         let input = fs::read_to_string("./inputs/day5.ic").unwrap();
         let (memory, output) = runWithInput(&input, vec![5]);
-        println!("{:?}", memory);
-        println!("{:?}", output);
         assert_eq!(output.last().unwrap(), &8684145);
+    }
+}
+
+#[cfg(test)]
+mod day_9 {
+    use super::*;
+
+    #[test]
+    fn part_1_example_1() {
+        let input = vec![
+            109, 1, 204, -1, 1001, 100, 1, 100, 1008, 100, 16, 101, 1006, 101, 0, 99,
+        ];
+        let (memory, output) = intcode(input.clone(), vec![]);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn part_1_example_2() {
+        let input = vec![1102, 34915192, 34915192, 7, 4, 7, 99, 0];
+        let (memory, output) = intcode(input.clone(), vec![]);
+        assert_eq!(output.len(), 1);
+        assert_eq!(
+            output[0].to_string().split("").collect::<Vec<&str>>().len() - 2,
+            16
+        );
+    }
+
+    #[test]
+    fn part_1_example_3() {
+        let input = vec![104, 1125899906842624, 99];
+        let (memory, output) = intcode(input.clone(), vec![]);
+        assert_eq!(output[0], 1125899906842624);
+    }
+
+    #[test]
+    fn part_1_puzzle() {
+        use std::fs;
+        let input = fs::read_to_string("./inputs/day9.ic").unwrap();
+        let (memory, output) = runWithInput(&input, vec![1]);
+        assert_eq!(output, vec![2457252183]);
+    }
+
+    #[test]
+    fn part_2_puzzle() {
+        use std::fs;
+        let input = fs::read_to_string("./inputs/day9.ic").unwrap();
+        let (memory, output) = runWithInput(&input, vec![2]);
+        assert_eq!(output, vec![70634]);
     }
 }
